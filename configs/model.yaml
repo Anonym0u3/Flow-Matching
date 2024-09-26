@@ -1,0 +1,6 @@
+target: model.ContextUnet
+params:
+  in_channels: 1
+  n_feat: 64
+  n_cfeat: 5
+  height: 28
