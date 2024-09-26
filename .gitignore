@@ -1,4 +1,0 @@
-.gitignore
-/checkpoints
-/wandb
-/__pycache__
