@@ -1,4 +1,4 @@
-# .gitignore
+.gitignore
 /checkpoints
 /wandb
-/ungit
+/__pycache__
