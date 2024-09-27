@@ -175,38 +175,104 @@ class ContextUnet(nn.Module):
             nn.ReLU(),
             nn.Conv2d(n_feat, self.in_channels, 3, 1, 1), # map to same number of channels as input
         )
+    
+    def time_emb(self, t, dim):
+        """对时间进行正弦函数的编码，单一维度
+       目标：让模型感知到输入x_t的时刻t
+       实现方式：多种多样
+       输入x：[B, C, H, W] x += temb 与空间无关的，也即每个空间位置（H, W）,都需要加上一个相同的时间编码向量[B, C]
+       假设B=1 t=0.1
+       1. 简单粗暴法
+       temb = [0.1] * C -> [0.1, 0.1, 0.1, ……]
+       x += temb.reshape(1, C, 1, 1)
+       2. 类似绝对位置编码方式
+       本代码实现方式
+       3. 通过学习的方式（保证T是离散的0， 1， 2， 3，……，T）
+       temb_learn = nn.Parameter(T+1, dim)
+       x += temb_learn[t, :].reshape(1, C, 1, 1)
+       
+       
+        Args:
+            t (float): 时间，维度为[B]
+            dim (int): 编码的维度
+
+        Returns:
+            torch.Tensor: 编码后的时间，维度为[B, dim]  输入是[B, C, H, W]
+        """
+        # 生成正弦编码
+        # 把t映射到[0, 1000]
+        t = t * 1000
+        # 10000^k k=torch.linspace……
+        freqs = torch.pow(10000, torch.linspace(0, 1, dim // 2)).to(t.device)
+        sin_emb = torch.sin(t[:, None] / freqs)
+        cos_emb = torch.cos(t[:, None] / freqs)
+
+        return torch.cat([sin_emb, cos_emb], dim=-1)
+
+    def label_emb(self, y, dim):
+        """对类别标签进行编码，同样采用正弦编码
+
+        Args:
+            y (torch.Tensor): 图像标签，维度为[B] label:0-9
+            dim (int): 编码的维度
+
+        Returns:
+            torch.Tensor: 编码后的标签，维度为[B, dim]
+        """
+        y = y * 1000
+
+        freqs = torch.pow(10000, torch.linspace(0, 1, dim // 2)).to(y.device)
+        sin_emb = torch.sin(y[:, None] / freqs)
+        cos_emb = torch.cos(y[:, None] / freqs)
+
+        return torch.cat([sin_emb, cos_emb], dim=-1)
 
     def forward(self, x, t, c=None):
         """
         x : (batch, n_feat, h, w) : input image
-        t : (batch, n_cfeat)      : time step
-        c : (batch, n_classes)    : context label
+        t : (batch,)      : time step
+        c : (batch,)    : context label
         """
         # x is the input image, c is the context label, t is the timestep, context_mask says which samples to block the context on
 
         # pass the input image through the initial convolutional layer
-        x = self.init_conv(x)
+        x = self.init_conv(x) #[100, 1, 28, 28]->[100, 64, 28, 28]
         # pass the result through the down-sampling path
-        down1 = self.down1(x)       #[100, 64, 8, 8]
-        down2 = self.down2(down1)   #[100, 128, 4, 4]
+        down1 = self.down1(x)       #[100, 64, 28, 28]->[100, 64, 14, 14]
+        down2 = self.down2(down1)   #[100, 64, 28, 28]->[100, 128, 7, 7]
         
         # convert the feature maps to a vector and apply an activation
-        hiddenvec = self.to_vec(down2)
+        hiddenvec = self.to_vec(down2) #[100, 128, 7, 7]->[100, 128, 1, 1]
         
         # mask out context if context_mask == 1
         if c is None:
-            c = torch.zeros(x.shape[0], self.n_cfeat).to(x)
+            c = torch.zeros(x.shape[0], 1).to(x)
             
         # embed context and timestep
+        cemb1 = self.label_emb(c, self.n_feat * 2).view(-1, self.n_feat * 2, 1, 1)     # (batch, 128, 1,1)
+        temb1 = self.time_emb(t, self.n_feat * 2).view(-1, self.n_feat * 2, 1, 1)        # (batch, 128, 1,1)
+        cemb2 = self.label_emb(c, self.n_feat).view(-1, self.n_feat, 1, 1)       # (batch, 64, 1,1)
+        temb2 = self.time_emb(t, self.n_feat).view(-1, self.n_feat, 1, 1)          # (batch, 64, 1,1)
+        """ 
         cemb1 = self.contextembed1(c).view(-1, self.n_feat * 2, 1, 1)     # (batch, 128, 1,1)
         temb1 = self.timeembed1(t).view(-1, self.n_feat * 2, 1, 1)        # (batch, 128, 1,1)
         cemb2 = self.contextembed2(c).view(-1, self.n_feat, 1, 1)       # (batch, 64, 1,1)
-        temb2 = self.timeembed2(t).view(-1, self.n_feat, 1, 1)          # (batch, 64, 1,1)
+        temb2 = self.timeembed2(t).view(-1, self.n_feat, 1, 1)          # (batch, 64, 1,1) """
         #print(f"uunet forward: cemb1 {cemb1.shape}. temb1 {temb1.shape}, cemb2 {cemb2.shape}. temb2 {temb2.shape}")
 
 
         up1 = self.up0(hiddenvec)
-        up2 = self.up1(cemb1*up1 + temb1, down2)  # add and multiply embeddings
-        up3 = self.up2(cemb2*up2 + temb2, down1)
+        up2 = self.up1(cemb1 + up1 + temb1, down2)  # add and multiply embeddings
+        up3 = self.up2(cemb2 + up2 + temb2, down1)
         out = self.out(torch.cat((up3, x), 1))
         return out
+if __name__ == '__main__':
+    # Test the ContextUnet model
+    model = ContextUnet(1, n_feat=64, n_cfeat=5, height=28)
+    x = torch.randn(100, 1, 28, 28)
+    t = torch.randn(100, 1)
+    #c = torch.randint(0, 10, (100, 5))
+    c = None
+    out = model(x, t, c)
+    print(out.shape)
+    # Expected output: torch.Size([100, 1, 28, 28])

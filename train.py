@@ -1,4 +1,3 @@
-from omegaconf import OmegaConf
 import torch
 from help_function import instantiate_from_config, load_state_dict
 import wandb
@@ -15,7 +14,8 @@ import os
 
 
 def train(config):
-    wandb.init(project="Flow", name="train_unconditional")
+    #wandb.init(project="Flow", name="train_unconditional_1.1")
+    wandb.init(project="Flow", name="train_conditional_1")
     config = OmegaConf.load(config)
     device = config.device
     dataset = MNIST("/hy-tmp/flowmatching/MNIST", download=True, transform=ToTensor())
@@ -32,7 +32,7 @@ def train(config):
     rf = RectifiedFlow()
 
     # 记录训练时候每一轮的loss
-    loss_list = []
+    #loss_list = []
 
     # 一些文件夹提前创建
     os.makedirs(config.save_path, exist_ok=True)
@@ -79,18 +79,19 @@ def train(config):
             if batch % config.batch_print_interval == 0:
                 print(f'[Epoch {epoch}] [batch {batch}] loss: {loss.item()}')
 
-            loss_list.append(loss.item())
+            #loss_list.append(loss.item())
 
         scheduler.step()
 
-        if epoch % config.checkpoint_save_interval == 0 or epoch == config.epochs - 1 or epoch == 0:
+        if epoch % config.checkpoint_save_interval == 0 or epoch == config.epochs - 1:
             # 第一轮也保存一下，快速测试用，大家可以删除
             # 保存模型
             print(f'Saving model {epoch} to {config.save_path}...')
             save_dict = dict(model=model.state_dict(),
                              optimizer=optimizer.state_dict(),
                              epoch=epoch,
-                             loss_list=loss_list)
+                             #loss_list=loss_list)
+                            )
             torch.save(save_dict,
                        os.path.join(config.save_path, f'miniunet_{epoch}.pth'))
 
